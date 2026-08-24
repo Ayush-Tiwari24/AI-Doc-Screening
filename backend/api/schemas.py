@@ -61,3 +61,13 @@ class ValidationResultOut(BaseModel):
     passed: bool
     severity: str
     details: str | None
+
+class TamperingResultOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    document_id: uuid.UUID
+    technique: str
+    suspicious_score: float | None
+    heatmap_path: str | None
+    details: dict | None

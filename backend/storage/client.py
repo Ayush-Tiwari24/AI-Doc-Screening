@@ -28,3 +28,14 @@ def get_presigned_url(object_name: str, expires_in: int = 3600) -> str:
         Params={"Bucket": settings.minio_bucket, "Key": object_name},
         ExpiresIn=expires_in,
     )
+
+def download_file(object_name: str, destination_path: str) -> str:
+    client = get_s3_client()
+
+    client.download_file(
+        settings.minio_bucket,
+        object_name,
+        destination_path,
+    )
+
+    return destination_path
