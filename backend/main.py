@@ -5,21 +5,24 @@ from api.documents import router as documents_router
 from api.extraction import router as extraction_router
 from api.validation import router as validation_router
 from api.tampering import router as tampering_router
+from api.face_verification import router as face_verification_router
 
 
 app = FastAPI(
     title="AI Document Screening System"
 )
 
+
 app.include_router(auth_router)
 app.include_router(documents_router)
 app.include_router(extraction_router)
 app.include_router(validation_router)
 app.include_router(tampering_router)
+app.include_router(face_verification_router)
 
 
 @app.get("/health")
-def health():
+async def health():
     return {
         "status": "ok"
     }

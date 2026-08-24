@@ -71,3 +71,15 @@ class TamperingResultOut(BaseModel):
     suspicious_score: float | None
     heatmap_path: str | None
     details: dict | None
+
+class FaceVerificationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    session_id: uuid.UUID
+    doc_photo_path: str | None
+    live_photo_path: str | None
+    similarity_score: float | None
+    match: bool | None
+    liveness_passed: bool | None = None
+    liveness_score: float | None = None

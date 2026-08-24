@@ -21,3 +21,7 @@ Pillow
 pytesseract
 pytest-asyncio
 httpx
+insightface
+onnxruntime
+opencv-python
+numpy
