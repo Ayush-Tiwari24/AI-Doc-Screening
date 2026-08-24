@@ -1,0 +1,10 @@
+{
+  "blacklist_match": 100,
+  "expired_document": 100,
+  "mrz_checksum_fail": 30,
+  "format_invalid": 20,
+  "cross_doc_mismatch": 25,
+  "tampering_score": 40,
+  "face_mismatch": 35,
+  "liveness_flag": 25
+}

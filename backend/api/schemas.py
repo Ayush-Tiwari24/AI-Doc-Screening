@@ -83,3 +83,16 @@ class FaceVerificationOut(BaseModel):
     match: bool | None
     liveness_passed: bool | None = None
     liveness_score: float | None = None
+
+class RiskBreakdownItem(BaseModel):
+    factor: str
+    points: float
+    raw_score: float | None = None
+
+
+class RiskReportOut(BaseModel):
+    session_id: uuid.UUID
+    risk_score: float
+    risk_level: str
+    breakdown: list[RiskBreakdownItem]
+    hard_override: bool
