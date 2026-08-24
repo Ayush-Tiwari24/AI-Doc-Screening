@@ -83,3 +83,16 @@ async def client():
 @pytest.fixture
 def unique_badge_id():
     return f"BADGE-{uuid.uuid4().hex[:8]}"
+
+import io
+
+from PIL import Image
+
+
+@pytest.fixture
+def sample_jpeg_bytes():
+    img = Image.new("RGB", (100, 100), color=(120, 140, 160))
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG")
+    buffer.seek(0)
+    return buffer.read()
