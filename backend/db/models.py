@@ -56,6 +56,12 @@ class TamperingTechnique(str, PyEnum):
     CNN_CLASSIFIER = "cnn_classifier"
 
 
+class Severity(str, PyEnum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
 class Checkpoint(Base):
     __tablename__ = "checkpoints"
 
@@ -163,6 +169,9 @@ class ValidationResult(Base):
     )
     rule_name: Mapped[str] = mapped_column(String(100), nullable=False)
     passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    severity: Mapped[Severity] = mapped_column(
+        SAEnum(Severity, name="validation_severity"), nullable=False, default=Severity.INFO
+    )
     details: Mapped[str | None] = mapped_column(Text)
 
     document: Mapped["Document"] = relationship(back_populates="validation_results")
