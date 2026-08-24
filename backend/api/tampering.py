@@ -1,9 +1,14 @@
 """
-Basic document tampering detection endpoint.
+Document tampering detection endpoint.
 
 Step 8:
 - Error Level Analysis (ELA)
 - Metadata / EXIF forensics
+
+Step 9:
+- CNN tampering score
+- Photo-swap analysis
+- Aggregate tampering score
 """
 
 import os
@@ -23,9 +28,16 @@ from db.models import (
     User,
 )
 from db.session import get_session
+from ml.aggregate_tampering import (
+    calculate_aggregate_tampering_score,
+)
+from ml.cnn_tamper_service import (
+    cnn_tamper_score,
+)
 from ml.tampering_service import (
     error_level_analysis,
     metadata_forensics,
+    photo_swap_analysis,
 )
 from storage.client import download_file
 
@@ -69,7 +81,7 @@ async def detect_basic_tampering(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Basic tampering detection currently "
+                "Tampering detection currently "
                 "supports JPG, JPEG and PNG images only"
             ),
         )
@@ -88,6 +100,10 @@ async def detect_basic_tampering(
             temp_path,
         )
 
+        # ---------------------------------------------------------
+        # Step 8 signals
+        # ---------------------------------------------------------
+
         ela_result = error_level_analysis(
             temp_path
         )
@@ -96,8 +112,31 @@ async def detect_basic_tampering(
             temp_path
         )
 
-        # Remove previous basic tampering results
-        # so repeated calls don't duplicate rows.
+        # ---------------------------------------------------------
+        # Step 9 signals
+        # ---------------------------------------------------------
+
+        cnn_result = cnn_tamper_score(
+            temp_path
+        )
+
+        photo_swap_result = photo_swap_analysis(
+            temp_path
+        )
+
+        aggregate_result = (
+            calculate_aggregate_tampering_score(
+                ela_score=ela_result["score"],
+                metadata_score=metadata_result["score"],
+                cnn_score=cnn_result["score"],
+                photo_swap_score=photo_swap_result["score"],
+            )
+        )
+
+        # ---------------------------------------------------------
+        # Remove previous tampering rows
+        # ---------------------------------------------------------
+
         await session.execute(
             delete(TamperingResult).where(
                 TamperingResult.document_id
@@ -106,10 +145,16 @@ async def detect_basic_tampering(
                     [
                         TamperingTechnique.ELA,
                         TamperingTechnique.METADATA,
+                        TamperingTechnique.CNN_CLASSIFIER,
+                        TamperingTechnique.PHOTO_SWAP,
                     ]
                 ),
             )
         )
+
+        # ---------------------------------------------------------
+        # Create ELA row
+        # ---------------------------------------------------------
 
         ela_row = TamperingResult(
             document_id=document.id,
@@ -124,6 +169,10 @@ async def detect_basic_tampering(
                 "details"
             ],
         )
+
+        # ---------------------------------------------------------
+        # Create metadata row
+        # ---------------------------------------------------------
 
         metadata_row = TamperingResult(
             document_id=document.id,
@@ -145,10 +194,102 @@ async def detect_basic_tampering(
             },
         )
 
+        # ---------------------------------------------------------
+        # Create CNN row
+        # ---------------------------------------------------------
+
+        cnn_row = TamperingResult(
+            document_id=document.id,
+            technique=TamperingTechnique.CNN_CLASSIFIER,
+            suspicious_score=cnn_result[
+                "score"
+            ],
+            heatmap_path=None,
+            details={
+                "model_loaded": cnn_result[
+                    "model_loaded"
+                ],
+                **cnn_result[
+                    "details"
+                ],
+            },
+        )
+
+        # ---------------------------------------------------------
+        # Create photo-swap row
+        # ---------------------------------------------------------
+
+        photo_swap_row = TamperingResult(
+            document_id=document.id,
+            technique=TamperingTechnique.PHOTO_SWAP,
+            suspicious_score=photo_swap_result[
+                "score"
+            ],
+            heatmap_path=None,
+            details=photo_swap_result[
+                "details"
+            ],
+        )
+
+        # ---------------------------------------------------------
+        # Attach aggregate score to each row's details
+        #
+        # No new database column is required for the prototype.
+        # ---------------------------------------------------------
+
+        aggregate_details = {
+            "aggregate_score": aggregate_result[
+                "score"
+            ],
+            "risk_level": aggregate_result[
+                "risk_level"
+            ],
+            "components": aggregate_result[
+                "components"
+            ],
+            "weights": aggregate_result[
+                "weights"
+            ],
+        }
+
+        ela_row.details = {
+            **(
+                ela_row.details
+                or {}
+            ),
+            "aggregate": aggregate_details,
+        }
+
+        metadata_row.details = {
+            **(
+                metadata_row.details
+                or {}
+            ),
+            "aggregate": aggregate_details,
+        }
+
+        cnn_row.details = {
+            **(
+                cnn_row.details
+                or {}
+            ),
+            "aggregate": aggregate_details,
+        }
+
+        photo_swap_row.details = {
+            **(
+                photo_swap_row.details
+                or {}
+            ),
+            "aggregate": aggregate_details,
+        }
+
         session.add_all(
             [
                 ela_row,
                 metadata_row,
+                cnn_row,
+                photo_swap_row,
             ]
         )
 
@@ -157,14 +298,21 @@ async def detect_basic_tampering(
         await session.refresh(
             ela_row
         )
-
         await session.refresh(
             metadata_row
+        )
+        await session.refresh(
+            cnn_row
+        )
+        await session.refresh(
+            photo_swap_row
         )
 
         return [
             ela_row,
             metadata_row,
+            cnn_row,
+            photo_swap_row,
         ]
 
     except HTTPException:

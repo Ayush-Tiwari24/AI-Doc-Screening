@@ -1,12 +1,16 @@
 """
-Tests for Step 8 tampering API.
+Tests for Step 9 advanced tampering API.
 
 Covers:
-- authenticated endpoint access
+- authentication
 - document not found
 - unsupported file extension
-- ELA + metadata persistence
-- repeat call replaces previous basic-analysis rows
+- ELA persistence
+- metadata persistence
+- CNN persistence
+- photo-swap persistence
+- aggregate score persistence
+- repeated call replaces previous rows
 """
 
 import uuid
@@ -83,12 +87,96 @@ def _make_document(
     )
 
 
+def _patch_tampering_services(monkeypatch):
+    def fake_download_file(
+        object_name,
+        destination_path,
+    ):
+        with open(
+            destination_path,
+            "wb",
+        ) as file:
+            file.write(b"fake-image-data")
+
+        return destination_path
+
+    monkeypatch.setattr(
+        "api.tampering.download_file",
+        fake_download_file,
+    )
+
+    monkeypatch.setattr(
+        "api.tampering.error_level_analysis",
+        lambda _path: {
+            "score": 0.40,
+            "heatmap_path": "tampering/ela/test.png",
+            "details": {
+                "mean_difference": 4.0,
+                "std_difference": 8.0,
+                "max_difference": 40.0,
+                "hotspot_ratio": 0.03,
+            },
+        },
+    )
+
+    monkeypatch.setattr(
+        "api.tampering.metadata_forensics",
+        lambda _path: {
+            "score": 0.20,
+            "flags": [
+                "Editing software detected: Adobe Photoshop"
+            ],
+            "metadata": {
+                "Software": "Adobe Photoshop"
+            },
+            "image": {
+                "width": 800,
+                "height": 500,
+                "dpi": [300, 300],
+                "format": "JPEG",
+            },
+        },
+    )
+
+    monkeypatch.setattr(
+        "api.tampering.cnn_tamper_score",
+        lambda _path: {
+            "score": 0.60,
+            "model_loaded": True,
+            "details": {
+                "message": "Mock CNN prediction",
+                "model_path": "mock-model.pt",
+            },
+        },
+    )
+
+    monkeypatch.setattr(
+        "api.tampering.photo_swap_analysis",
+        lambda _path: {
+            "score": 0.30,
+            "details": {
+                "portrait_region": {
+                    "left": 10,
+                    "top": 20,
+                    "right": 200,
+                    "bottom": 400,
+                },
+                "mean_difference": 2.0,
+                "std_difference": 5.0,
+                "max_difference": 25.0,
+                "message": (
+                    "Photo region analyzed for "
+                    "compression inconsistencies"
+                ),
+            },
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_tampering_endpoint_requires_authentication(client):
-    document_id = uuid.uuid4()
-
     response = await client.post(
-        f"/documents/{document_id}/detect-tampering/basic"
+        f"/documents/{uuid.uuid4()}/detect-tampering/basic"
     )
 
     assert response.status_code == 401
@@ -98,6 +186,7 @@ async def test_tampering_endpoint_requires_authentication(client):
 async def test_tampering_endpoint_document_not_found_404(client):
     async with TestSessionFactory() as db:
         _, badge_id = await _seed_officer_and_session(db)
+
         await db.commit()
 
     headers = await _auth_headers(
@@ -139,150 +228,15 @@ async def test_tampering_rejects_unsupported_file_type(client):
     )
 
     assert response.status_code == 400
-    assert "supports JPG" in response.json()["detail"]
-
-
-@pytest.mark.asyncio
-async def test_tampering_endpoint_creates_ela_and_metadata_rows(
-    client,
-    monkeypatch,
-):
-    async with TestSessionFactory() as db:
-        session_id, badge_id = await _seed_officer_and_session(db)
-
-        document = _make_document(
-            session_id=session_id,
-            file_path="documents/test.jpg",
-        )
-
-        db.add(document)
-        await db.commit()
-
-        document_id = document.id
-
-    headers = await _auth_headers(
-        client,
-        badge_id,
-    )
-
-    def fake_download_file(
-        object_name,
-        destination_path,
-    ):
-        with open(
-            destination_path,
-            "wb",
-        ) as file:
-            file.write(b"fake-image-data")
-
-        return destination_path
-
-    def fake_ela(_image_path):
-        return {
-            "score": 0.42,
-            "heatmap_path": "tampering/ela/test.png",
-            "details": {
-                "mean_difference": 4.2,
-                "std_difference": 9.1,
-                "max_difference": 45.0,
-                "hotspot_ratio": 0.03,
-            },
-        }
-
-    def fake_metadata(_image_path):
-        return {
-            "score": 0.60,
-            "flags": [
-                "Editing software detected: Adobe Photoshop"
-            ],
-            "metadata": {
-                "Software": "Adobe Photoshop"
-            },
-            "image": {
-                "width": 800,
-                "height": 500,
-                "dpi": [300, 300],
-                "format": "JPEG",
-            },
-        }
-
-    monkeypatch.setattr(
-        "api.tampering.download_file",
-        fake_download_file,
-    )
-
-    monkeypatch.setattr(
-        "api.tampering.error_level_analysis",
-        fake_ela,
-    )
-
-    monkeypatch.setattr(
-        "api.tampering.metadata_forensics",
-        fake_metadata,
-    )
-
-    response = await client.post(
-        f"/documents/{document_id}/detect-tampering/basic",
-        headers=headers,
-    )
-
-    assert response.status_code == 201, response.text
-
-    data = response.json()
-
-    assert len(data) == 2
-
-    techniques = {
-        row["technique"]
-        for row in data
-    }
-
-    assert techniques == {
-        "ela",
-        "metadata",
-    }
-
-    async with TestSessionFactory() as db:
-        result = await db.execute(
-            select(TamperingResult).where(
-                TamperingResult.document_id
-                == document_id
-            )
-        )
-
-        rows = result.scalars().all()
-
-    assert len(rows) == 2
-
-    rows_by_technique = {
-        row.technique: row
-        for row in rows
-    }
-
-    ela_row = rows_by_technique[
-        TamperingTechnique.ELA
-    ]
-
-    metadata_row = rows_by_technique[
-        TamperingTechnique.METADATA
-    ]
-
-    assert ela_row.suspicious_score == 0.42
-    assert ela_row.heatmap_path == (
-        "tampering/ela/test.png"
-    )
-
-    assert metadata_row.suspicious_score == 0.60
-    assert metadata_row.heatmap_path is None
 
     assert (
-        "Editing software detected"
-        in metadata_row.details["flags"][0]
+        "supports JPG"
+        in response.json()["detail"]
     )
 
 
 @pytest.mark.asyncio
-async def test_repeated_tampering_call_replaces_old_basic_rows(
+async def test_tampering_endpoint_creates_four_technique_rows(
     client,
     monkeypatch,
 ):
@@ -303,50 +257,309 @@ async def test_repeated_tampering_call_replaces_old_basic_rows(
         badge_id,
     )
 
-    def fake_download_file(
-        object_name,
-        destination_path,
-    ):
-        with open(
-            destination_path,
-            "wb",
-        ) as file:
-            file.write(b"fake-image-data")
-
-        return destination_path
-
-    monkeypatch.setattr(
-        "api.tampering.download_file",
-        fake_download_file,
+    _patch_tampering_services(
+        monkeypatch
     )
 
-    monkeypatch.setattr(
-        "api.tampering.error_level_analysis",
-        lambda _path: {
-            "score": 0.20,
-            "heatmap_path": "tampering/ela/repeat.png",
-            "details": {
-                "mean_difference": 2.0,
-                "std_difference": 4.0,
-                "max_difference": 20.0,
-                "hotspot_ratio": 0.01,
-            },
-        },
+    response = await client.post(
+        f"/documents/{document_id}/detect-tampering/basic",
+        headers=headers,
     )
 
-    monkeypatch.setattr(
-        "api.tampering.metadata_forensics",
-        lambda _path: {
-            "score": 0.10,
-            "flags": [],
-            "metadata": {},
-            "image": {
-                "width": 800,
-                "height": 500,
-                "dpi": None,
-                "format": "JPEG",
-            },
-        },
+    assert response.status_code == 201, response.text
+
+    data = response.json()
+
+    assert len(data) == 4
+
+    techniques = {
+        row["technique"]
+        for row in data
+    }
+
+    assert techniques == {
+        "ela",
+        "metadata",
+        "cnn_classifier",
+        "photo_swap",
+    }
+
+    async with TestSessionFactory() as db:
+        result = await db.execute(
+            select(TamperingResult).where(
+                TamperingResult.document_id
+                == document_id
+            )
+        )
+
+        rows = result.scalars().all()
+
+    assert len(rows) == 4
+
+
+@pytest.mark.asyncio
+async def test_tampering_scores_are_persisted(
+    client,
+    monkeypatch,
+):
+    async with TestSessionFactory() as db:
+        session_id, badge_id = await _seed_officer_and_session(db)
+
+        document = _make_document(
+            session_id=session_id
+        )
+
+        db.add(document)
+        await db.commit()
+
+        document_id = document.id
+
+    headers = await _auth_headers(
+        client,
+        badge_id,
+    )
+
+    _patch_tampering_services(
+        monkeypatch
+    )
+
+    response = await client.post(
+        f"/documents/{document_id}/detect-tampering/basic",
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+
+    async with TestSessionFactory() as db:
+        result = await db.execute(
+            select(TamperingResult).where(
+                TamperingResult.document_id
+                == document_id
+            )
+        )
+
+        rows = result.scalars().all()
+
+    rows_by_technique = {
+        row.technique: row
+        for row in rows
+    }
+
+    assert (
+        rows_by_technique[
+            TamperingTechnique.ELA
+        ].suspicious_score
+        == 0.40
+    )
+
+    assert (
+        rows_by_technique[
+            TamperingTechnique.METADATA
+        ].suspicious_score
+        == 0.20
+    )
+
+    assert (
+        rows_by_technique[
+            TamperingTechnique.CNN_CLASSIFIER
+        ].suspicious_score
+        == 0.60
+    )
+
+    assert (
+        rows_by_technique[
+            TamperingTechnique.PHOTO_SWAP
+        ].suspicious_score
+        == 0.30
+    )
+
+
+@pytest.mark.asyncio
+async def test_aggregate_score_is_attached_to_details(
+    client,
+    monkeypatch,
+):
+    async with TestSessionFactory() as db:
+        session_id, badge_id = await _seed_officer_and_session(db)
+
+        document = _make_document(
+            session_id=session_id
+        )
+
+        db.add(document)
+        await db.commit()
+
+        document_id = document.id
+
+    headers = await _auth_headers(
+        client,
+        badge_id,
+    )
+
+    _patch_tampering_services(
+        monkeypatch
+    )
+
+    response = await client.post(
+        f"/documents/{document_id}/detect-tampering/basic",
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+
+    data = response.json()
+
+    for row in data:
+        aggregate = row["details"][
+            "aggregate"
+        ]
+
+        assert aggregate[
+            "aggregate_score"
+        ] == pytest.approx(
+            0.42
+        )
+
+        assert aggregate[
+            "risk_level"
+        ] == "medium"
+
+        assert set(
+            aggregate[
+                "components"
+            ].keys()
+        ) == {
+            "ela",
+            "metadata",
+            "cnn",
+            "photo_swap",
+        }
+
+
+@pytest.mark.asyncio
+async def test_cnn_details_are_saved(
+    client,
+    monkeypatch,
+):
+    async with TestSessionFactory() as db:
+        session_id, badge_id = await _seed_officer_and_session(db)
+
+        document = _make_document(
+            session_id=session_id
+        )
+
+        db.add(document)
+        await db.commit()
+
+        document_id = document.id
+
+    headers = await _auth_headers(
+        client,
+        badge_id,
+    )
+
+    _patch_tampering_services(
+        monkeypatch
+    )
+
+    response = await client.post(
+        f"/documents/{document_id}/detect-tampering/basic",
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+
+    rows = {
+        row["technique"]: row
+        for row in response.json()
+    }
+
+    cnn = rows[
+        "cnn_classifier"
+    ]
+
+    assert cnn[
+        "details"
+    ]["model_loaded"] is True
+
+    assert (
+        cnn["details"]["message"]
+        == "Mock CNN prediction"
+    )
+
+
+@pytest.mark.asyncio
+async def test_photo_swap_details_are_saved(
+    client,
+    monkeypatch,
+):
+    async with TestSessionFactory() as db:
+        session_id, badge_id = await _seed_officer_and_session(db)
+
+        document = _make_document(
+            session_id=session_id
+        )
+
+        db.add(document)
+        await db.commit()
+
+        document_id = document.id
+
+    headers = await _auth_headers(
+        client,
+        badge_id,
+    )
+
+    _patch_tampering_services(
+        monkeypatch
+    )
+
+    response = await client.post(
+        f"/documents/{document_id}/detect-tampering/basic",
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+
+    rows = {
+        row["technique"]: row
+        for row in response.json()
+    }
+
+    photo_swap = rows[
+        "photo_swap"
+    ]
+
+    assert (
+        "portrait_region"
+        in photo_swap["details"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_repeated_tampering_call_keeps_only_four_rows(
+    client,
+    monkeypatch,
+):
+    async with TestSessionFactory() as db:
+        session_id, badge_id = await _seed_officer_and_session(db)
+
+        document = _make_document(
+            session_id=session_id
+        )
+
+        db.add(document)
+        await db.commit()
+
+        document_id = document.id
+
+    headers = await _auth_headers(
+        client,
+        badge_id,
+    )
+
+    _patch_tampering_services(
+        monkeypatch
     )
 
     first_response = await client.post(
@@ -373,14 +586,14 @@ async def test_repeated_tampering_call_replaces_old_basic_rows(
 
         rows = result.scalars().all()
 
-    assert len(rows) == 2
+    assert len(rows) == 4
 
-    techniques = {
+    assert {
         row.technique
         for row in rows
-    }
-
-    assert techniques == {
+    } == {
         TamperingTechnique.ELA,
         TamperingTechnique.METADATA,
+        TamperingTechnique.CNN_CLASSIFIER,
+        TamperingTechnique.PHOTO_SWAP,
     }

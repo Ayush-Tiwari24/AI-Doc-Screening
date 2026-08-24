@@ -432,3 +432,200 @@ def metadata_forensics(image_path: str) -> dict:
             "format": image.format,
         },
     }
+
+def photo_swap_analysis(
+    image_path: str,
+) -> dict:
+    """
+    Perform basic photo-swap inconsistency analysis.
+
+    This is a lightweight heuristic detector intended to
+    identify unusual local differences in the document's
+    assumed portrait region.
+
+    The current prototype assumes the portrait is generally
+    located in the left portion of an identity document.
+
+    Returns:
+        {
+            "score": float,
+            "details": dict
+        }
+    """
+
+    image = Image.open(
+        image_path
+    ).convert("RGB")
+
+    width, height = image.size
+
+    # ---------------------------------------------------------
+    # Basic image validation
+    # ---------------------------------------------------------
+
+    if width < 100 or height < 100:
+        return {
+            "score": 0.0,
+            "details": {
+                "message": (
+                    "Image is too small for reliable "
+                    "photo-swap analysis"
+                ),
+                "width": width,
+                "height": height,
+            },
+        }
+
+    # ---------------------------------------------------------
+    # Approximate portrait region
+    #
+    # For the prototype we inspect the left-middle area where
+    # identity-document portraits commonly appear.
+    # ---------------------------------------------------------
+
+    left = int(
+        width * 0.05
+    )
+
+    top = int(
+        height * 0.15
+    )
+
+    right = int(
+        width * 0.40
+    )
+
+    bottom = int(
+        height * 0.85
+    )
+
+    portrait_region = image.crop(
+        (
+            left,
+            top,
+            right,
+            bottom,
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Compare compression behaviour of the portrait region
+    # with the complete document.
+    # ---------------------------------------------------------
+
+    temp_portrait = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=".jpg",
+        ) as tmp:
+            temp_portrait = tmp.name
+
+        portrait_region.save(
+            temp_portrait,
+            "JPEG",
+            quality=90,
+        )
+
+        recompressed = Image.open(
+            temp_portrait
+        ).convert("RGB")
+
+        difference = ImageChops.difference(
+            portrait_region,
+            recompressed,
+        ).convert("L")
+
+        stats = ImageStat.Stat(
+            difference
+        )
+
+        mean_difference = float(
+            stats.mean[0]
+        )
+
+        std_difference = float(
+            stats.stddev[0]
+        )
+
+        # -----------------------------------------------------
+        # Edge / local variation
+        # -----------------------------------------------------
+
+        extrema = difference.getextrema()
+
+        max_difference = float(
+            extrema[1]
+        )
+
+        # -----------------------------------------------------
+        # Build suspicion score
+        #
+        # High compression inconsistency in the portrait
+        # region contributes to a higher score.
+        # -----------------------------------------------------
+
+        mean_score = _clamp(
+            mean_difference / 25.0
+        )
+
+        variation_score = _clamp(
+            std_difference / 35.0
+        )
+
+        max_score = _clamp(
+            max_difference / 150.0
+        )
+
+        suspicion_score = (
+            (0.40 * mean_score)
+            + (0.40 * variation_score)
+            + (0.20 * max_score)
+        )
+
+        suspicion_score = round(
+            _clamp(
+                suspicion_score
+            ),
+            4,
+        )
+
+        return {
+            "score": suspicion_score,
+            "details": {
+                "portrait_region": {
+                    "left": left,
+                    "top": top,
+                    "right": right,
+                    "bottom": bottom,
+                },
+                "mean_difference": round(
+                    mean_difference,
+                    4,
+                ),
+                "std_difference": round(
+                    std_difference,
+                    4,
+                ),
+                "max_difference": round(
+                    max_difference,
+                    4,
+                ),
+                "message": (
+                    "Photo region analyzed for "
+                    "compression inconsistencies"
+                ),
+            },
+        }
+
+    finally:
+        if (
+            temp_portrait
+            and os.path.exists(
+                temp_portrait
+            )
+        ):
+            os.unlink(
+                temp_portrait
+            )
