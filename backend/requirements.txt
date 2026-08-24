@@ -4,3 +4,10 @@ black
 ruff
 pytest
 httpx
+sqlalchemy[asyncio]
+alembic
+asyncpg
+pydantic-settings
+boto3
+redis
+python-dotenv
