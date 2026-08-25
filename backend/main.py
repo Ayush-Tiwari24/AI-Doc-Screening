@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from fastapi.middleware.cors import CORSMiddleware
 from auth.router import router as auth_router
 from api.documents import router as documents_router
 from api.extraction import router as extraction_router
@@ -12,6 +13,16 @@ from api.websocket import router as websocket_router
 
 app = FastAPI(
     title="AI Document Screening System"
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
