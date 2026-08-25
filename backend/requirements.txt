@@ -25,3 +25,5 @@ insightface
 onnxruntime
 opencv-python
 numpy
+celery
+redis

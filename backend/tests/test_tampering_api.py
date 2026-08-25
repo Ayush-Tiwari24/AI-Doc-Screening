@@ -88,6 +88,11 @@ def _make_document(
 
 
 def _patch_tampering_services(monkeypatch):
+    """
+    Patch tampering functions where they are now used:
+    services.tampering_analysis_service
+    """
+
     def fake_download_file(
         object_name,
         destination_path,
@@ -101,12 +106,12 @@ def _patch_tampering_services(monkeypatch):
         return destination_path
 
     monkeypatch.setattr(
-        "api.tampering.download_file",
+        "services.tampering_analysis_service.download_file",
         fake_download_file,
     )
 
     monkeypatch.setattr(
-        "api.tampering.error_level_analysis",
+        "services.tampering_analysis_service.error_level_analysis",
         lambda _path: {
             "score": 0.40,
             "heatmap_path": "tampering/ela/test.png",
@@ -120,7 +125,7 @@ def _patch_tampering_services(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "api.tampering.metadata_forensics",
+        "services.tampering_analysis_service.metadata_forensics",
         lambda _path: {
             "score": 0.20,
             "flags": [
@@ -139,7 +144,7 @@ def _patch_tampering_services(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "api.tampering.cnn_tamper_score",
+        "services.tampering_analysis_service.cnn_tamper_score",
         lambda _path: {
             "score": 0.60,
             "model_loaded": True,
@@ -151,7 +156,7 @@ def _patch_tampering_services(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "api.tampering.photo_swap_analysis",
+        "services.tampering_analysis_service.photo_swap_analysis",
         lambda _path: {
             "score": 0.30,
             "details": {
