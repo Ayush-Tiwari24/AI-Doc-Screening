@@ -1,26 +1,52 @@
-import axios, { type AxiosInstance } from 'axios';
+import axios, { type AxiosInstance, type AxiosError } from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 
+// ─── Token Storage Keys ───────────────────────────────────────
+const ACCESS_TOKEN_KEY = 'sentinel_access_token';
+const REFRESH_TOKEN_KEY = 'sentinel_refresh_token';
+
+// ─── In-memory mirrors (for speed, restored from storage on load) ──
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
+
+// ─── Restore tokens from localStorage on module load ─────────
+function loadStoredTokens() {
+  accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
+  refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+}
+
+loadStoredTokens();
 
 export function setTokens(access: string, refresh: string) {
   accessToken = access;
   refreshToken = refresh;
+  localStorage.setItem(ACCESS_TOKEN_KEY, access);
+  localStorage.setItem(REFRESH_TOKEN_KEY, refresh);
 }
 
 export function clearTokens() {
   accessToken = null;
   refreshToken = null;
+  localStorage.removeItem(ACCESS_TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
 export function getAccessToken() {
   return accessToken;
 }
 
-const api: AxiosInstance = axios.create({ baseURL: API_BASE_URL });
+export function hasStoredTokens(): boolean {
+  return !!localStorage.getItem(ACCESS_TOKEN_KEY);
+}
 
+// ─── Axios singleton ──────────────────────────────────────────
+const api: AxiosInstance = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 30000,
+});
+
+// ─── Request interceptor: attach bearer token ─────────────────
 api.interceptors.request.use((config) => {
   if (accessToken) {
     config.headers.Authorization = `Bearer ${accessToken}`;
@@ -28,12 +54,13 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// ─── Response interceptor: handle 401 + refresh ───────────────
 let refreshingPromise: Promise<string> | null = null;
 
 api.interceptors.response.use(
   (response) => response,
-  async (error) => {
-    const originalRequest = error.config;
+  async (error: AxiosError) => {
+    const originalRequest = error.config as typeof error.config & { _retry?: boolean };
     if (error.response?.status === 401 && refreshToken && !originalRequest._retry) {
       originalRequest._retry = true;
       try {
@@ -49,7 +76,9 @@ api.interceptors.response.use(
             });
         }
         const newAccessToken = await refreshingPromise;
-        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+        if (originalRequest.headers) {
+          originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+        }
         return api(originalRequest);
       } catch {
         clearTokens();
